@@ -1,0 +1,46 @@
+#include "../src/core/geometry/StlParser.h"
+#include "../src/core/geometry/TemperatureCsvParser.h"
+#include "../src/core/export/CsvExport.h"
+#include "../src/core/thermal/ThermalSolver.h"
+#include "../src/core/performance/Benchmark.h"
+#include "../src/core/hardware/MockDevices.h"
+#include "../src/core/ml/Backprop.h"
+#include <cmath>
+#include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <thread>
+namespace fs=std::filesystem;
+static int failed=0;
+#define CHECK(x) do{if(!(x)){std::cerr<<"FAIL "<<__FILE__<<":"<<__LINE__<<" "<<#x<<"\n";++failed;}}while(0)
+int main(){using namespace uew;const auto unique=std::chrono::steady_clock::now().time_since_epoch().count();const fs::path temp=fs::temp_directory_path()/("uew_test_data_"+std::to_string(unique));fs::create_directories(temp);
+    ThermalSolver solver;ThermalParameters p;std::vector<double> errors;
+    for(int n:{10,20,40,80}){auto s=solver.solve(p,n);CHECK(s.nodalTemperature.size()==static_cast<std::size_t>(n+1));CHECK(std::abs(s.nodalTemperature.front()-p.leftTemperature)<1e-10);CHECK(std::abs(s.nodalTemperature.back()-p.rightTemperature)<1e-10);CHECK(s.midpoints.size()==static_cast<std::size_t>(n));for(auto&m:s.midpoints){const auto index=static_cast<std::size_t>(&m-s.midpoints.data());CHECK(std::abs(m.finiteElementTemperature-0.5*(s.nodalTemperature[index]+s.nodalTemperature[index+1]))<1e-10);CHECK(std::abs(m.exactTemperature-ThermalSolver::exactTemperature(m.x,p))<1e-12);CHECK(std::abs(m.absoluteError-std::abs(m.finiteElementTemperature-m.exactTemperature))<1e-12);}const double expected=p.heatGeneration/p.conductivity*std::pow(p.length/n,2)/8.0;CHECK(std::abs(s.maxMidpointError-expected)<1e-9);errors.push_back(s.maxMidpointError);}
+    CHECK(errors[1]<errors[0]&&errors[2]<errors[1]&&errors[3]<errors[2]);bool rejected=false;try{solver.solve(p,0);}catch(...){rejected=true;}CHECK(rejected);for(double invalid:{0.0,-1.0}){rejected=false;try{auto bad=p;bad.conductivity=invalid;solver.solve(bad,10);}catch(...){rejected=true;}CHECK(rejected);rejected=false;try{auto bad=p;bad.area=invalid;solver.solve(bad,10);}catch(...){rejected=true;}CHECK(rejected);}rejected=false;try{auto bad=p;bad.length=std::numeric_limits<double>::infinity();solver.solve(bad,10);}catch(...){rejected=true;}CHECK(rejected);
+    auto cases=generateCases(8,12,1234);const auto sameCases=generateCases(8,12,1234);CHECK(cases.size()==sameCases.size());for(std::size_t i=0;i<cases.size();++i){CHECK(cases[i].caseId==static_cast<int>(i));CHECK(cases[i].parameters.conductivity==sameCases[i].parameters.conductivity);CHECK(cases[i].parameters.heatGeneration==sameCases[i].parameters.heatGeneration);}const unsigned workers=std::min(2u,std::max(1u,std::thread::hardware_concurrency()));auto serial=runBatch(cases,1),parallel=runBatch(cases,workers);CHECK(maxBatchDifference(serial,parallel)<=1e-8);for(std::size_t i=0;i<cases.size();++i){auto reference=solver.solve(cases[i].parameters,cases[i].elements);CHECK(std::abs(serial[i].nodalTemperature.back()-reference.nodalTemperature.back())<1e-12);}CHECK(cases.front().caseId==0&&cases.back().caseId==7);rejected=false;try{runBatch(cases,0);}catch(...){rejected=true;}CHECK(rejected);
+    auto checks=checkGradients(Parameters{},1.0,2.0,1e-6,1e-5);CHECK(checks.size()==4);for(auto&c:checks){CHECK(c.pass);CHECK(c.absoluteError<=1e-5);}Parameters trained;const auto first=forward(trained);CHECK(std::abs(first.z-0.5)<1e-12);CHECK(std::abs(first.h-std::tanh(0.5))<1e-12);CHECK(std::abs(first.prediction-std::tanh(0.5))<1e-12);const auto gradient=gradients(trained);auto oneStep=trained;train(oneStep,1,0.1);CHECK(std::abs(oneStep.w-(trained.w-0.1*gradient.dw))<1e-12);CHECK(std::abs(oneStep.b-(trained.b-0.1*gradient.db))<1e-12);CHECK(std::abs(oneStep.v-(trained.v-0.1*gradient.dv))<1e-12);CHECK(std::abs(oneStep.c-(trained.c-0.1*gradient.dc))<1e-12);const double initial=first.loss;auto loss=train(trained,100);CHECK(loss.size()==100);CHECK(loss.back().loss<initial);
+    auto devices=discoverMockDevices(true);CHECK(devices.size()==3);CHECK(!devices[1]->capabilities().description.empty());for(std::size_t i:{0u,2u}){CHECK(!devices[i]->capabilities().description.empty());CHECK(devices[i]->connect().ok);CHECK(devices[i]->readTelemetry().simulated);CHECK(devices[i]->disconnect().ok);CHECK(!devices[i]->disconnect().ok);}auto failure=devices[1]->connect();CHECK(!failure.ok);CHECK(failure.message.find("SIMULATED TIMEOUT")!=std::string::npos);CHECK(devices[1]->connect().ok);CHECK(devices[1]->readTelemetry().simulated);CHECK(devices[1]->disconnect().ok);
+    rejected=false;try{devices[2]->readTelemetry();}catch(...){rejected=true;}CHECK(rejected);rejected=false;try{runBatch(cases,std::max(1u,std::thread::hardware_concurrency())+1);}catch(...){rejected=true;}CHECK(rejected);
+    {std::ofstream stl(temp/"ok.stl");stl<<"solid sample\n facet normal 0 0 1\n outer loop\n vertex 0 0 0\n vertex 1 0 0\n vertex 0 1 0\n endloop\n endfacet\nendsolid sample\n";}
+    auto geom=parseAsciiStl((temp/"ok.stl").string());CHECK(std::holds_alternative<Geometry>(geom));if(auto g=std::get_if<Geometry>(&geom))CHECK(g->triangles.size()==1);
+    {std::ofstream empty(temp/"empty.stl");}auto emptyStl=parseAsciiStl((temp/"empty.stl").string());CHECK(std::holds_alternative<ParseError>(emptyStl));
+    {std::ofstream malformed(temp/"bad.stl");malformed<<"solid bad\nfacet normal nan 0 0\n";}auto badStl=parseAsciiStl((temp/"bad.stl").string());CHECK(std::holds_alternative<ParseError>(badStl));
+    {std::ofstream nonfinite(temp/"nonfinite.stl");nonfinite<<"solid bad\nfacet normal 0 0 1\nouter loop\nvertex 0 0 inf\n";}CHECK(std::holds_alternative<ParseError>(parseAsciiStl((temp/"nonfinite.stl").string())));
+    {std::ofstream trailing(temp/"trailing.stl");trailing<<"solid x\nendsolid x\nvertex 1 2 3\n";}CHECK(std::holds_alternative<ParseError>(parseAsciiStl((temp/"trailing.stl").string())));
+    {std::ofstream csv(temp/"ok.csv");csv<<"node_id,x_m,y_m,z_m,temperature_C\n1,0,0,0,100\n";}
+    auto points=parseTemperatureCsv((temp/"ok.csv").string());CHECK(std::holds_alternative<std::vector<TemperaturePoint>>(points));
+    {std::ofstream csv(temp/"empty.csv");}auto emptyCsv=parseTemperatureCsv((temp/"empty.csv").string());CHECK(std::holds_alternative<ParseError>(emptyCsv));
+    {std::ofstream csv(temp/"missing.csv");csv<<"node_id,x_m,y_m,z_m\n";}auto missing=parseTemperatureCsv((temp/"missing.csv").string());CHECK(std::holds_alternative<ParseError>(missing));if(auto e=std::get_if<ParseError>(&missing))CHECK(e->message.find("temperature_C")!=std::string::npos);
+    {std::ofstream csv(temp/"malformed.csv");csv<<"node_id,x_m,y_m,z_m,temperature_C\n1,0,0\n";}auto malformedCsv=parseTemperatureCsv((temp/"malformed.csv").string());CHECK(std::holds_alternative<ParseError>(malformedCsv));
+    {std::ofstream csv(temp/"badnumber.csv");csv<<"node_id,x_m,y_m,z_m,temperature_C\n1,nope,0,0,100\n";}auto badNumber=parseTemperatureCsv((temp/"badnumber.csv").string());CHECK(std::holds_alternative<ParseError>(badNumber));if(auto e=std::get_if<ParseError>(&badNumber))CHECK(e->message.find("x_m")!=std::string::npos);
+    {std::ofstream csv(temp/"nan.csv");csv<<"node_id,x_m,y_m,z_m,temperature_C\n1,nan,0,0,100\n";}
+    auto bad=parseTemperatureCsv((temp/"nan.csv").string());CHECK(std::holds_alternative<ParseError>(bad));
+    {std::ofstream csv(temp/"inf.csv");csv<<"node_id,x_m,y_m,z_m,temperature_C\n1,0,0,0,Infinity\n";}
+    auto inf=parseTemperatureCsv((temp/"inf.csv").string());CHECK(std::holds_alternative<ParseError>(inf));
+    const auto exportDir=(temp/"exports").string();auto thermal=solver.solve(p,20);exportThermal(thermal,p,exportDir+"/thermal");exportConvergence(exportDir+"/thermal");const unsigned cpus=std::max(1u,std::thread::hardware_concurrency());auto rows=benchmark(cases,cpus,5);CHECK(rows.size()==std::min(4u,cpus));for(const auto&row:rows)CHECK(row.repetitionsMs.size()==5);exportBenchmark(rows,exportDir+"/performance");exportAgreement(maxBatchDifference(serial,parallel),exportDir+"/performance");exportEnvironment("test environment",exportDir+"/performance");exportTraining(loss,exportDir+"/ml");exportGradientCheck(checks,exportDir+"/ml");CHECK(fs::exists(temp/"exports/thermal/nodal_temperatures.csv"));CHECK(fs::exists(temp/"exports/thermal/midpoint_comparison.csv"));CHECK(fs::exists(temp/"exports/thermal/temperature_comparison.svg"));CHECK(fs::exists(temp/"exports/thermal/convergence.csv"));CHECK(fs::exists(temp/"exports/thermal/mesh_convergence.svg"));CHECK(fs::exists(temp/"exports/performance/raw_timings.csv"));CHECK(fs::exists(temp/"exports/performance/summary.csv"));CHECK(fs::exists(temp/"exports/performance/agreement.csv"));CHECK(fs::exists(temp/"exports/performance/environment.txt"));CHECK(fs::exists(temp/"exports/performance/worker_time.svg"));CHECK(fs::exists(temp/"exports/performance/speedup.svg"));CHECK(fs::exists(temp/"exports/performance/efficiency.svg"));CHECK(fs::exists(temp/"exports/ml/loss.csv"));CHECK(fs::exists(temp/"exports/ml/loss.svg"));CHECK(fs::exists(temp/"exports/ml/gradient_check.csv"));
+    fs::remove_all(temp);std::cout<<(failed?"FAILED":"ALL TESTS PASSED")<<" ("<<failed<<" failures)\n";return failed?1:0;}

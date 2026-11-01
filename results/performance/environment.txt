@@ -1,0 +1,12 @@
+Operating system: Windows 10.0 build 26200
+CPU: 12th Gen Intel(R) Core(TM) i5-12450H
+Physical cores: 8
+Logical processors: 12
+RAM: 7860 MiB
+Compiler: MSVC 1951
+Build type: Debug
+Workload cases: 80
+Mesh elements per case: 40
+Random seed: 20261031
+Warm-up: one run per worker count
+Measured repetitions: 5

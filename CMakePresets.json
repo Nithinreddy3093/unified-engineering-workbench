@@ -1,0 +1,11 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 4, "minor": 2, "patch": 0 },
+  "configurePresets": [
+    { "name": "windows-debug", "displayName": "Windows x64 Debug", "generator": "Visual Studio 18 2026", "architecture": "x64", "binaryDir": "${sourceDir}/build/windows-debug", "cacheVariables": { "UEW_BUILD_TESTS": "ON", "UEW_BUILD_DESKTOP": "ON" } },
+    { "name": "windows-release", "displayName": "Windows x64 Release", "generator": "Visual Studio 18 2026", "architecture": "x64", "binaryDir": "${sourceDir}/build/windows-release", "cacheVariables": { "UEW_BUILD_TESTS": "ON", "UEW_BUILD_DESKTOP": "ON" } },
+    { "name": "portable-debug", "displayName": "Portable Debug", "generator": "Ninja", "binaryDir": "${sourceDir}/build/debug", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "UEW_BUILD_TESTS": "ON", "UEW_BUILD_DESKTOP": "OFF" } }
+  ],
+  "buildPresets": [ { "name": "windows-debug", "configurePreset": "windows-debug", "configuration": "Debug" }, { "name": "windows-release", "configurePreset": "windows-release", "configuration": "Release" }, { "name": "portable-debug", "configurePreset": "portable-debug" } ],
+  "testPresets": [ { "name": "windows-debug", "configurePreset": "windows-debug", "configuration": "Debug", "output": { "outputOnFailure": true } }, { "name": "windows-release", "configurePreset": "windows-release", "configuration": "Release", "output": { "outputOnFailure": true } }, { "name": "portable-debug", "configurePreset": "portable-debug", "output": { "outputOnFailure": true } } ]
+}

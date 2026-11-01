@@ -1,0 +1,9 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "CMake Configure (Debug x64)", "type": "shell", "command": "cmake --preset windows-debug", "group": "build", "problemMatcher": [] },
+    { "label": "CMake Build (Debug x64)", "type": "shell", "command": "cmake --build --preset windows-debug --clean-first", "group": "build", "dependsOn": "CMake Configure (Debug x64)", "problemMatcher": "$msCompile" },
+    { "label": "CTest (Debug x64)", "type": "shell", "command": "ctest --preset windows-debug", "group": "test", "problemMatcher": [] },
+    { "label": "Run Core Validation", "type": "shell", "command": ".\\build\\windows-debug\\Debug\\uew_validation.exe", "dependsOn": "CMake Build (Debug x64)", "problemMatcher": [] }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    { "name": "Launch Unified Engineering Workbench", "type": "cppvsdbg", "request": "launch", "program": "${workspaceFolder}/build/windows-debug/Debug/UnifiedEngineeringWorkbench.exe", "cwd": "${workspaceFolder}", "console": "externalTerminal", "preLaunchTask": "CMake Build (Debug x64)" }
+  ]
+}

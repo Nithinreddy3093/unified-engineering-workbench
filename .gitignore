@@ -1,0 +1,8 @@
+/build/
+/out/
+/results/thermal/*.csv
+/results/performance/*.csv
+/results/ml/*.csv
+*.user
+*.suo
+.vs/

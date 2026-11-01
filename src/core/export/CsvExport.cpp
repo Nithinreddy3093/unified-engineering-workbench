@@ -1,0 +1,37 @@
+#include "CsvExport.h"
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <stdexcept>
+#include <algorithm>
+#include <cmath>
+#include <vector>
+#include <utility>
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
+namespace uew { namespace {
+void replaceFile(const std::filesystem::path& tmp,const std::filesystem::path& final){
+#ifdef _WIN32
+    if(!MoveFileExW(tmp.c_str(),final.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)){auto code=GetLastError();std::filesystem::remove(tmp);throw std::runtime_error("Export failed replacing destination, Windows error "+std::to_string(code));}
+#else
+    std::error_code ec;std::filesystem::rename(tmp,final,ec);if(ec){std::filesystem::remove(tmp);throw std::runtime_error("Export failed replacing destination: "+ec.message());}
+#endif
+}
+template<class F> void atomicCsv(const std::string& path,F write){namespace fs=std::filesystem;fs::path final(path),tmp=final;tmp += ".tmp";fs::create_directories(final.parent_path());{std::ofstream out(tmp,std::ios::binary|std::ios::trunc);if(!out)throw std::runtime_error("Export failed: cannot create temporary file '"+tmp.string()+"'.");out<<std::setprecision(12);write(out);out.flush();if(!out)throw std::runtime_error("Export failed while writing '"+tmp.string()+"'.");}replaceFile(tmp,final);}
+using Series=std::pair<std::string,std::vector<std::pair<double,double>>>;
+void svg(const std::string& path,const std::string& title,const std::string& xlabel,const std::string& ylabel,const std::vector<Series>& series){namespace fs=std::filesystem;const double W=900,H=520,L=88,R=35,T=55,B=75;double xmin=INFINITY,xmax=-INFINITY,ymin=INFINITY,ymax=-INFINITY;for(auto&s:series)for(auto&p:s.second){xmin=std::min(xmin,p.first);xmax=std::max(xmax,p.first);ymin=std::min(ymin,p.second);ymax=std::max(ymax,p.second);}if(!std::isfinite(xmin)){xmin=0;xmax=1;ymin=0;ymax=1;}if(xmin==xmax)xmax=xmin+1;if(ymin==ymax){ymin-=1;ymax+=1;}const double pad=(ymax-ymin)*.08;ymin-=pad;ymax+=pad;auto X=[&](double x){return L+(x-xmin)/(xmax-xmin)*(W-L-R);};auto Y=[&](double y){return H-B-(y-ymin)/(ymax-ymin)*(H-T-B);};fs::path f(path),tmp=f;tmp += ".tmp";fs::create_directories(f.parent_path());std::ofstream o(tmp,std::ios::binary|std::ios::trunc);if(!o)throw std::runtime_error("Plot export failed: cannot create '"+tmp.string()+"'.");o<<std::fixed<<std::setprecision(2)<<"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"900\" height=\"520\" viewBox=\"0 0 900 520\"><rect width=\"100%\" height=\"100%\" fill=\"white\"/><text x=\"450\" y=\"30\" text-anchor=\"middle\" font-family=\"Arial\" font-size=\"20\">"<<title<<"</text><path d=\"M "<<L<<' '<<T<<" V "<<H-B<<" H "<<W-R<<"\" fill=\"none\" stroke=\"#333\"/><text x=\"450\" y=\"505\" text-anchor=\"middle\" font-family=\"Arial\">"<<xlabel<<"</text><text x=\"20\" y=\"260\" transform=\"rotate(-90 20 260)\" text-anchor=\"middle\" font-family=\"Arial\">"<<ylabel<<"</text>";for(int i=0;i<=5;++i){double y=ymin+(ymax-ymin)*i/5.0;double py=Y(y);o<<"<path d=\"M "<<L<<' '<<py<<" H "<<W-R<<"\" stroke=\"#ddd\"/><text x=\""<<L-8<<"\" y=\""<<py+4<<"\" text-anchor=\"end\" font-family=\"Arial\" font-size=\"11\">"<<y<<"</text>";}const char* colors[]={"#1565c0","#d84315","#2e7d32","#8e24aa"};std::size_t ci=0;for(auto&s:series){o<<"<polyline fill=\"none\" stroke=\""<<colors[ci%4]<<"\" stroke-width=\"2.5\" points=\"";for(auto&p:s.second)o<<X(p.first)<<','<<Y(p.second)<<' ';o<<"\"/>";const double ly=T+18*ci++;o<<"<text x=\""<<W-R-150<<"\" y=\""<<ly<<"\" font-family=\"Arial\" font-size=\"12\" fill=\""<<colors[(ci-1)%4]<<"\">"<<s.first<<"</text>";}o<<"</svg>";o.close();if(!o)throw std::runtime_error("Plot export failed while writing '"+tmp.string()+"'.");replaceFile(tmp,f);}
+}
+void exportThermal(const ThermalSolution&s,const ThermalParameters&p,const std::string& d){atomicCsv(d+"/nodal_temperatures.csv",[&](auto&o){o<<"node_id,x_m,temperature_FE_C,temperature_exact_C\n";for(std::size_t i=0;i<s.nodeX.size();++i)o<<i<<','<<s.nodeX[i]<<','<<s.nodalTemperature[i]<<','<<ThermalSolver::exactTemperature(s.nodeX[i],p)<<'\n';});atomicCsv(d+"/midpoint_comparison.csv",[&](auto&o){o<<"x_m,temperature_FE_C,temperature_exact_C,absolute_error_C\n";for(auto&m:s.midpoints)o<<m.x<<','<<m.finiteElementTemperature<<','<<m.exactTemperature<<','<<m.absoluteError<<'\n';});exportThermalPlot(s,d);}
+void exportConvergence(const std::string&d){atomicCsv(d+"/convergence.csv",[](auto&o){o<<"elements,max_midpoint_absolute_error_C\n";ThermalSolver sol;ThermalParameters p;for(int n:{10,20,40,80})o<<n<<','<<sol.solve(p,n).maxMidpointError<<'\n';});exportConvergencePlot(d);}
+void exportBenchmark(const std::vector<BenchmarkRow>& rows,const std::string&d){atomicCsv(d+"/raw_timings.csv",[&](auto&o){o<<"workers,repetition,time_ms\n";for(auto&r:rows)for(std::size_t i=0;i<r.repetitionsMs.size();++i)o<<r.workers<<','<<i+1<<','<<r.repetitionsMs[i]<<'\n';});atomicCsv(d+"/summary.csv",[&](auto&o){o<<"workers,median_time_ms,speedup,efficiency\n";for(auto&r:rows)o<<r.workers<<','<<r.medianMs<<','<<r.speedup<<','<<r.efficiency<<'\n';});exportBenchmarkPlots(rows,d);}
+void exportTraining(const std::vector<TrainingPoint>&v,const std::string&d){atomicCsv(d+"/loss.csv",[&](auto&o){o<<"step,loss\n";for(auto&p:v)o<<p.step<<','<<p.loss<<'\n';});exportTrainingPlot(v,d);}
+void exportGradientCheck(const std::vector<GradientCheck>&v,const std::string&d){atomicCsv(d+"/gradient_check.csv",[&](auto&o){o<<"parameter,analytical,numerical,absolute_error,status\n";for(auto&p:v)o<<p.parameter<<','<<p.analytical<<','<<p.numerical<<','<<p.absoluteError<<','<<(p.pass?"PASS":"FAIL")<<'\n';});}
+void exportAgreement(double d,const std::string&dir){atomicCsv(dir+"/agreement.csv",[&](auto&o){o<<"max_absolute_nodal_temperature_difference_C,status\n"<<d<<','<<(d<=1e-8?"PASS":"FAIL")<<'\n';});}
+void exportThermalPlot(const ThermalSolution&s,const std::string&d){Series fe{"FE",{}},ex{"Exact",{}};for(std::size_t i=0;i<s.nodeX.size();++i)fe.second.emplace_back(s.nodeX[i],s.nodalTemperature[i]);ex.second.emplace_back(s.nodeX.front(),s.nodalTemperature.front());for(auto&m:s.midpoints)ex.second.emplace_back(m.x,m.exactTemperature);ex.second.emplace_back(s.nodeX.back(),s.nodalTemperature.back());svg(d+"/temperature_comparison.svg","Thermal Temperature: FE and Exact","x (m)","Temperature (°C)",{fe,ex});}
+void exportConvergencePlot(const std::string&d){ThermalSolver sol;ThermalParameters p;Series s{"Maximum midpoint error",{}};for(int n:{10,20,40,80})s.second.emplace_back(n,sol.solve(p,n).maxMidpointError);svg(d+"/mesh_convergence.svg","Mesh Convergence","Number of Elements","Maximum Absolute Midpoint Error (°C)",{s});}
+void exportBenchmarkPlots(const std::vector<BenchmarkRow>&r,const std::string&d){Series t{"Median time",{}},s{"Speedup",{}},e{"Efficiency",{}};for(auto&x:r){t.second.emplace_back(x.workers,x.medianMs);s.second.emplace_back(x.workers,x.speedup);e.second.emplace_back(x.workers,x.efficiency);}svg(d+"/worker_time.svg","Thermal Batch Median Time","Workers","Time (ms)",{t});svg(d+"/speedup.svg","Thermal Batch Speedup","Workers","Speedup",{s});svg(d+"/efficiency.svg","Thermal Batch Efficiency","Workers","Efficiency",{e});}
+void exportTrainingPlot(const std::vector<TrainingPoint>&v,const std::string&d){Series s{"Loss",{}};for(auto&p:v)s.second.emplace_back(p.step,p.loss);svg(d+"/loss.svg","Backpropagation Training Loss","Training Step","Loss (J)",{s});}
+void exportEnvironment(const std::string&info,const std::string&d){atomicCsv(d+"/environment.txt",[&](auto&o){o<<info;});}
+}
